@@ -1,0 +1,1 @@
+pub const Result = struct {};
