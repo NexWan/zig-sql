@@ -86,3 +86,49 @@ pub fn parseAuthRequest(payload: []const u8) !AuthRequest {
     const code = std.mem.readInt(i32, payload[0..4], .big);
     return std.meta.intToEnum(AuthRequest, code) catch error.UnsupportedAuthMethod;
 }
+
+pub fn parseRowDescription(allocator: std.mem.Allocator, payload: []const u8) ![][]const u8 {
+    if (payload.len < 2) return error.InvalidRowDescription;
+    const col_count: usize = @intCast(std.mem.readInt(i16, payload[0..2], .big));
+
+    const columns = try allocator.alloc([]const u8, col_count);
+    errdefer allocator.free(columns);
+
+    var pos: usize = 2;
+    for (0..col_count) |i| {
+        const name_start = pos;
+        while (pos < payload.len and payload[pos] != 0) : (pos += 1) {}
+        columns[i] = try allocator.dupe(u8, payload[name_start..pos]);
+        pos += 1; // skip null terminator
+        pos += 18; // tableOID(4) + colAttr(2) + typeOID(4) + typeSize(2) + typeMod(4) + format(2)
+    }
+
+    return columns;
+}
+
+pub fn parseDataRow(allocator: std.mem.Allocator, payload: []const u8, col_count: usize) ![]?[]const u8 {
+    const row = try allocator.alloc(?[]const u8, col_count);
+    errdefer allocator.free(row);
+
+    var pos: usize = 2; // skip int16 column count
+    for (0..col_count) |i| {
+        if (pos + 4 > payload.len) return error.InvalidDataRow;
+        const len = std.mem.readInt(i32, payload[pos..][0..4], .big);
+        pos += 4;
+        if (len == -1) {
+            row[i] = null;
+        } else {
+            const value_len: usize = @intCast(len);
+            row[i] = try allocator.dupe(u8, payload[pos .. pos + value_len]);
+            pos += value_len;
+        }
+    }
+
+    return row;
+}
+
+pub fn writeSimpleQuery(writer: anytype, query: []const u8) !void {
+    try writer.writeByte('Q');
+    try writeInt32BE(writer, @intCast(4 + query.len + 1));
+    try writeCString(writer, query);
+}

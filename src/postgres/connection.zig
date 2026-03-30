@@ -1,5 +1,6 @@
 const Config = @import("config.zig").Config;
 const protocol = @import("protocol.zig");
+const result = @import("result.zig");
 const std = @import("std");
 
 pub const Connection = struct {
@@ -9,6 +10,44 @@ pub const Connection = struct {
 
     pub fn deinit(self: *Connection) void {
         self.stream.close();
+    }
+
+    pub fn query(self: *Connection, sql: []const u8) !result.Result {
+        var read_buffer: [4096]u8 = undefined;
+        var write_buffer: [0]u8 = .{};
+        var reader_impl = self.stream.reader(&read_buffer);
+        var writer_impl = self.stream.writer(&write_buffer);
+
+        try protocol.writeSimpleQuery(&writer_impl.interface, sql);
+
+        var columns: [][]const u8 = &.{};
+        var rows = std.ArrayListUnmanaged(result.Row){};
+        defer rows.deinit(self.allocator);
+
+        while (true) {
+            const message = try protocol.readMessage(self.allocator, reader_impl.interface());
+            defer protocol.freeMessage(self.allocator, message);
+
+            switch (message.tag) {
+                'T' => {
+                    columns = try protocol.parseRowDescription(self.allocator, message.payload);
+                },
+                'D' => {
+                    const row = try protocol.parseDataRow(self.allocator, message.payload, columns.len);
+                    try rows.append(self.allocator, row);
+                },
+                'C' => {}, // CommandComplete, ignore
+                'Z' => {
+                    return result.Result{
+                        .columns = columns,
+                        .rows = try rows.toOwnedSlice(self.allocator),
+                        .allocator = self.allocator,
+                    };
+                },
+                'E' => return error.ServerError,
+                else => return error.UnsupportedBackendMessage,
+            }
+        }
     }
 };
 

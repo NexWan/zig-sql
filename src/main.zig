@@ -15,6 +15,13 @@ pub fn main() !void {
     defer connection.deinit();
 
     try stdout.print("Connected to PostgreSQL at {s}:{d}\n", .{ config.host, config.port });
+    var result = try connection.query("SELECT version();");
+    defer result.deinit();
+
+    for (result.rows) |row| {
+        try stdout.print("{s}\n", .{row[0] orelse "NULL"});
+    }
+
     try stdout.flush();
 }
 
